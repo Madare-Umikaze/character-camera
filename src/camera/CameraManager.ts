@@ -358,13 +358,15 @@ export class CameraManager {
 
   /** 現在のストリームのトラックをすべて停止し、video から切り離す。 */
   private releaseStream(): void {
-    if (this.stream !== null) {
-      stopStream(this.stream)
-      this.stream = null
-    }
-    this.video.pause()
-    this.video.srcObject = null
+  this.cancelFrameLoop()
+
+  if (this.stream !== null) {
+    stopStream(this.stream)
+    this.stream = null
   }
+  this.video.pause()
+  this.video.srcObject = null
+}
 
   // ---------------------------------------------------------------
   // フレームループ
