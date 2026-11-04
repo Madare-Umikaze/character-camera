@@ -13,28 +13,31 @@ export interface CameraController {
   subscribe(listener: (state: CameraState) => void): () => void
 }
 
-/** CameraView の生成結果。 */
-export interface CameraViewElements {
-  /** カメラ映像を表示する video 要素（CameraManager に渡す）。 */
-  readonly video: HTMLVideoElement
-}
-
 /**
  * カメラ画面の UI。
  * DOM の構築、ボタン操作、状態表示、エラー表示のみを担当する。
+ *
+ * - video 要素は、映像の描画元としてだけ使う(画面には canvas が映す)。
+ * - viewport は、プレビューの canvas を配置する要素。
+ * - panelSlot は、キャラクター画像の操作パネルを差し込む場所。
  */
 export class CameraView {
+  /** 映像の描画元の video 要素(CameraManager に渡す)。画面には表示されない。 */
   readonly video: HTMLVideoElement
+  /** プレビューの canvas を配置する要素。 */
+  readonly viewport: HTMLElement
+  /** キャラクター画像の操作パネルを差し込む要素。 */
+  readonly panelSlot: HTMLElement
 
   private readonly root: HTMLElement
   private readonly statusText: HTMLElement
+  private readonly rendererText: HTMLElement
   private readonly sizeText: HTMLElement
   private readonly errorBox: HTMLElement
   private readonly placeholder: HTMLElement
   private readonly startButton: HTMLButtonElement
   private readonly stopButton: HTMLButtonElement
   private readonly switchButton: HTMLButtonElement
-  private readonly viewport: HTMLElement
 
   private unsubscribe: (() => void) | null = null
   private resizeObserver: ResizeObserver | null = null
@@ -52,19 +55,28 @@ export class CameraView {
     this.statusText.setAttribute('role', 'status')
     this.statusText.setAttribute('aria-live', 'polite')
 
+    this.rendererText = document.createElement('span')
+    this.rendererText.className = 'camera-meta-item'
+
     this.sizeText = document.createElement('span')
-    this.sizeText.className = 'camera-size'
+    this.sizeText.className = 'camera-meta-item'
 
-    header.append(this.statusText, this.sizeText)
+    const meta = document.createElement('div')
+    meta.className = 'camera-meta'
+    meta.append(this.rendererText, this.sizeText)
 
-    // --- 映像表示 ---
+    header.append(this.statusText, meta)
+
+    // --- プレビュー(canvas は PreviewPresenter が最背面に追加する) ---
     this.viewport = document.createElement('div')
     this.viewport.className = 'camera-viewport'
 
+    // 映像の描画元。画面には表示しない(1px・透明)。hidden にはしない。
     this.video = document.createElement('video')
     this.video.className = 'camera-video'
     this.video.setAttribute('playsinline', '')
     this.video.muted = true
+    this.video.setAttribute('aria-hidden', 'true')
 
     this.placeholder = document.createElement('div')
     this.placeholder.className = 'camera-placeholder'
@@ -77,7 +89,11 @@ export class CameraView {
 
     this.viewport.append(this.video, this.placeholder, this.errorBox)
 
-    // --- 操作ボタン ---
+    // --- キャラクター画像の操作パネルの場所 ---
+    this.panelSlot = document.createElement('div')
+    this.panelSlot.className = 'camera-panel-slot'
+
+    // --- カメラの操作ボタン ---
     const controls = document.createElement('footer')
     controls.className = 'camera-controls'
 
@@ -89,7 +105,7 @@ export class CameraView {
 
     const container = document.createElement('main')
     container.className = 'camera-app'
-    container.append(header, this.viewport, controls)
+    container.append(header, this.viewport, this.panelSlot, controls)
 
     this.root.replaceChildren(container)
 
@@ -100,6 +116,11 @@ export class CameraView {
       error: null,
       canSwitch: false,
     })
+  }
+
+  /** 使用中の描画方式の表示を設定する(例: "WebGL2")。 */
+  setRendererLabel(label: string): void {
+    this.rendererText.textContent = label
   }
 
   /**
@@ -123,7 +144,7 @@ export class CameraView {
       this.run(() => controller.switchCamera())
     })
 
-    // ページが非表示になったら、カメラを停止する（復帰時の自動再起動はしない）。
+    // ページが非表示になったら、カメラを停止する(復帰時の自動再起動はしない)。
     this.listen(document, 'visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
         this.run(() => controller.stopIfActive())
@@ -185,7 +206,7 @@ export class CameraView {
     })
   }
 
-  /** video 要素の表示サイズ変化を監視する。 */
+  /** プレビューの表示サイズ変化を監視する。 */
   private observeSize(): void {
     if (typeof ResizeObserver === 'undefined') {
       return
@@ -211,8 +232,6 @@ export class CameraView {
     this.statusText.textContent = describeState(state)
     this.root.dataset['cameraStatus'] = status
 
-    const showVideo = status === 'running'
-    this.video.hidden = !showVideo
     this.placeholder.hidden = status === 'running' || status === 'error'
     this.placeholder.textContent =
       status === 'starting' ? 'カメラを起動しています…' : 'カメラを起動してください'

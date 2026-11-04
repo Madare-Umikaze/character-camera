@@ -6,6 +6,7 @@
   --color-text-muted: #9ca3af;
   --color-accent: #3b82f6;
   --color-accent-text: #ffffff;
+  --color-danger: #b91c1c;
   --color-error-bg: rgba(220, 38, 38, 0.92);
   --color-error-text: #ffffff;
 
@@ -57,13 +58,13 @@ body {
 }
 
 /* ---------------------------------------------------------------
-   カメラ画面（縦画面優先）
-   上：状態表示 / 中央：映像 / 下：操作ボタン
+   カメラ画面(縦画面優先)
+   上:状態表示 / 中央:プレビュー / その下:画像パネル / 最下部:カメラ操作
    --------------------------------------------------------------- */
 
 .camera-app {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   width: 100%;
   height: 100%;
   background: var(--color-bg);
@@ -86,31 +87,62 @@ body {
   font-weight: 600;
 }
 
-.camera-size {
-  font-size: 0.8rem;
+.camera-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 10px;
+}
+
+.camera-meta-item {
+  font-size: 0.75rem;
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
 
+/* プレビュー領域。canvas(.preview-canvas)は最背面に追加される。 */
 .camera-viewport {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   min-height: 0;
   overflow: hidden;
   background: #000000;
 }
 
-/* 縦横比を維持して、映像全体を表示する（引き伸ばさない）。 */
-.camera-video {
+.preview-canvas {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
   background: #000000;
+  /* タッチ操作中に、ページのスクロールやズームが起きないようにする。 */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: grab;
 }
 
+.preview-canvas--dragging {
+  cursor: grabbing;
+}
+
+/*
+  映像の描画元の video。画面には表示しない。
+  hidden や display: none にすると、iOS Safari でフレームが更新されないことがあるため、
+  1px・透明で配置する。
+*/
+.camera-video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* canvas の操作を邪魔しないよう、pointer-events を無効にする。 */
 .camera-placeholder {
   position: absolute;
   inset: 0;
@@ -121,6 +153,7 @@ body {
   text-align: center;
   color: var(--color-text-muted);
   font-size: 0.95rem;
+  pointer-events: none;
 }
 
 .camera-error {
@@ -138,7 +171,140 @@ body {
   font-size: 0.95rem;
   line-height: 1.6;
   text-align: left;
+  pointer-events: none;
 }
+
+/* ---------------------------------------------------------------
+   キャラクター画像パネル
+   --------------------------------------------------------------- */
+
+.camera-panel-slot {
+  max-height: 40svh;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+}
+
+.character-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px calc(env(safe-area-inset-right, 0px) + 16px) 10px
+    calc(env(safe-area-inset-left, 0px) + 16px);
+}
+
+.character-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.character-panel__row--slider {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr) 3.5em;
+}
+
+.character-panel__row--actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.character-panel__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.character-panel__label {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.character-panel__slider {
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
+  accent-color: var(--color-accent);
+  touch-action: manipulation;
+}
+
+.character-panel__slider:disabled {
+  opacity: 0.4;
+}
+
+.character-panel__value {
+  font-size: 0.85rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.character-panel__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-error-bg);
+  color: var(--color-error-text);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.panel-button {
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: #2c2c2e;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.panel-button--primary {
+  flex: 0 0 auto;
+  border-color: transparent;
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+}
+
+.panel-button--danger {
+  background: var(--color-danger);
+  border-color: transparent;
+}
+
+.panel-button--small {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border-color: rgba(255, 255, 255, 0.5);
+  color: var(--color-error-text);
+}
+
+.panel-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.panel-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------
+   カメラ操作ボタン
+   --------------------------------------------------------------- */
 
 .camera-controls {
   display: grid;
