@@ -20,6 +20,8 @@ export interface CameraController {
  * - video 要素は、映像の描画元としてだけ使う(画面には canvas が映す)。
  * - viewport は、プレビューの canvas を配置する要素。
  * - panelSlot は、キャラクター画像の操作パネルを差し込む場所。
+ * - パネルとカメラ操作は aside.camera-side にまとめる。
+ *   縦画面では下部に並び、横画面ではサイドバーになる(配置は CSS で切り替える)。
  */
 export class CameraView {
   /** 映像の描画元の video 要素(CameraManager に渡す)。画面には表示されない。 */
@@ -103,9 +105,14 @@ export class CameraView {
 
     controls.append(this.startButton, this.stopButton, this.switchButton)
 
+    // --- パネルとカメラ操作をまとめる(縦画面は下部、横画面はサイドバー) ---
+    const side = document.createElement('aside')
+    side.className = 'camera-side'
+    side.append(this.panelSlot, controls)
+
     const container = document.createElement('main')
     container.className = 'camera-app'
-    container.append(header, this.viewport, this.panelSlot, controls)
+    container.append(header, this.viewport, side)
 
     this.root.replaceChildren(container)
 

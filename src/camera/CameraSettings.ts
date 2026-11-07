@@ -19,7 +19,7 @@ export type CameraErrorKind =
   | 'constraint' // 要求した条件を満たせない
   | 'play-failed' // 映像の再生開始に失敗
   | 'aborted' // 起動が中断された
-  | 'unknown' // 起動処理の失敗（上記以外）
+  | 'unknown' // 起動処理の失敗(上記以外)
 
 /** カメラエラー。 */
 export interface CameraError {
@@ -37,18 +37,18 @@ export interface VideoResolution {
 /** 実行中のカメラ情報。 */
 export interface CameraInfo {
   readonly facing: CameraFacing
-  /** 実際に使用しているカメラの deviceId（取得できない場合は null）。 */
+  /** 実際に使用しているカメラの deviceId(取得できない場合は null)。 */
   readonly deviceId: string | null
-  /** 実際の映像解像度。 */
+  /** 実際の映像解像度。映像の寸法が変わると更新される。 */
   readonly resolution: VideoResolution
-  /** 実際のフレームレート（取得できない場合は null）。 */
+  /** 実際のフレームレート(取得できない場合は null)。 */
   readonly frameRate: number | null
 }
 
 /** カメラの状態スナップショット。 */
 export interface CameraState {
   readonly status: CameraStatus
-  /** 現在選択している向き（停止中でも保持する）。 */
+  /** 現在選択している向き(停止中でも保持する)。 */
   readonly facing: CameraFacing
   /** 稼働中のみ設定される。 */
   readonly info: CameraInfo | null
@@ -58,10 +58,18 @@ export interface CameraState {
   readonly canSwitch: boolean
 }
 
+/**
+ * 画面や映像の縦横の向き。
+ * square は、幅と高さが等しい場合と、寸法が不明(0 以下・NaN)な場合。
+ * 「縦とも横とも言えない」ものとして扱い、向きの不一致とは判定しない。
+ * (端末の物理的な向きや、前面・背面の選択とは別の概念。)
+ */
+export type LayoutOrientation = 'portrait' | 'landscape' | 'square'
+
 /** 既定の設定値。 */
 export const DEFAULT_CAMERA_FACING: CameraFacing = 'environment'
 
-/** 理想とする映像の解像度（可能な限り高解像度を要求する）。 */
+/** 理想とする映像の解像度(可能な限り高解像度を要求する)。横向きの場合の幅・高さ。 */
 export const IDEAL_VIDEO_WIDTH = 3840
 export const IDEAL_VIDEO_HEIGHT = 2160
 
@@ -79,16 +87,70 @@ export function facingLabel(facing: CameraFacing): string {
 }
 
 /**
+ * 寸法から、縦横の向きを判定する。
+ * 幅 > 高さ なら landscape、高さ > 幅 なら portrait。
+ * 等しい場合や、寸法が有効でない場合は square。
+ */
+export function orientationOf(size: VideoResolution): LayoutOrientation {
+  const { width, height } = size
+  if (!(width > 0) || !(height > 0)) {
+    return 'square'
+  }
+  if (width > height) {
+    return 'landscape'
+  }
+  if (height > width) {
+    return 'portrait'
+  }
+  return 'square'
+}
+
+/**
+ * 映像の向きが、画面の向きと食い違っているか。
+ * どちらかが square(判定不能・正方形)の場合は、食い違いとは判定しない。
+ */
+export function isOrientationMismatch(
+  video: VideoResolution,
+  viewport: LayoutOrientation,
+): boolean {
+  const videoOrientation = orientationOf(video)
+  if (videoOrientation === 'square' || viewport === 'square') {
+    return false
+  }
+  return videoOrientation !== viewport
+}
+
+/**
+ * 画面の向きに合わせた、映像サイズの制約(width / height の ideal)を返す。
+ * portrait のときだけ、幅と高さの ideal を入れ替える。
+ * landscape と square は、従来どおりの横向きの指定。
+ * 既存のトラックに applyConstraints する場合にも、そのまま使える
+ * (カメラの選択には影響しない)。
+ */
+export function buildSizeConstraints(
+  orientation: LayoutOrientation,
+): MediaTrackConstraints {
+  const portrait = orientation === 'portrait'
+  return {
+    width: { ideal: portrait ? IDEAL_VIDEO_HEIGHT : IDEAL_VIDEO_WIDTH },
+    height: { ideal: portrait ? IDEAL_VIDEO_WIDTH : IDEAL_VIDEO_HEIGHT },
+  }
+}
+
+/**
  * 向きと deviceId から getUserMedia の制約を生成する。
  * 音声は取得しない。deviceId が指定された場合は exact で指定する。
+ *
+ * @param orientation 画面の向きに合わせた映像サイズを要求する場合に指定する。
+ *   省略時は、従来どおりの横向きの指定(通常の起動の挙動は変わらない)。
  */
 export function buildConstraints(
   facing: CameraFacing,
   deviceId: string | null,
+  orientation: LayoutOrientation = 'landscape',
 ): MediaStreamConstraints {
   const video: MediaTrackConstraints = {
-    width: { ideal: IDEAL_VIDEO_WIDTH },
-    height: { ideal: IDEAL_VIDEO_HEIGHT },
+    ...buildSizeConstraints(orientation),
     frameRate: { ideal: IDEAL_FRAME_RATE },
   }
 
@@ -105,7 +167,7 @@ export function buildConstraints(
 export function messageForKind(kind: CameraErrorKind): string {
   switch (kind) {
     case 'insecure-context':
-      return 'カメラを使用するには HTTPS で接続する必要があります。安全な接続（https://）でアクセスしてください。'
+      return 'カメラを使用するには HTTPS で接続する必要があります。安全な接続(https://)でアクセスしてください。'
     case 'unsupported':
       return 'このブラウザはカメラ機能に対応していません。iPhone の Safari や Android の Chrome など、最新のブラウザをお試しください。'
     case 'permission-denied':
@@ -174,7 +236,7 @@ export function toCameraError(error: unknown): CameraError {
   return createCameraError(classifyCameraErrorName(extractErrorName(error)))
 }
 
-/** 実行環境の判定に必要な最小情報（テストしやすいよう注入可能にする）。 */
+/** 実行環境の判定に必要な最小情報(テストしやすいよう注入可能にする)。 */
 export interface EnvironmentInfo {
   readonly isSecureContext: boolean
   readonly hasMediaDevices: boolean

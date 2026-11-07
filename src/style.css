@@ -57,9 +57,19 @@ body {
   height: 100%;
 }
 
+/* ブラウザのアドレスバーなどで変わる実際の表示領域に合わせる(非対応なら 100% のまま)。 */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #app {
+    height: 100dvh;
+  }
+}
+
 /* ---------------------------------------------------------------
-   カメラ画面(縦画面優先)
+   カメラ画面:縦画面(既定)
    上:状態表示 / 中央:プレビュー / その下:画像パネル / 最下部:カメラ操作
+   camera-side は display: contents にして、Phase 2 の 4 行グリッドをそのまま使う。
    --------------------------------------------------------------- */
 
 .camera-app {
@@ -68,6 +78,10 @@ body {
   width: 100%;
   height: 100%;
   background: var(--color-bg);
+}
+
+.camera-side {
+  display: contents;
 }
 
 .camera-header {
@@ -103,6 +117,7 @@ body {
 /* プレビュー領域。canvas(.preview-canvas)は最背面に追加される。 */
 .camera-viewport {
   position: relative;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: #000000;
@@ -346,4 +361,83 @@ body {
 .camera-button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------
+   横画面:サイドバー型
+   左:ヘッダー+プレビュー(画面の大部分) / 右:操作パネル(幅を制限)
+   縦画面のレイアウトを引き伸ばさず、操作を右側に縦にまとめる。
+   --------------------------------------------------------------- */
+
+@media (orientation: landscape) {
+  .camera-app {
+    grid-template-columns: minmax(0, 1fr) clamp(240px, 34vw, 320px);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .camera-header {
+    grid-column: 1;
+    grid-row: 1;
+    /* 右側のセーフエリアはサイドバー側で吸収する。左側(ノッチ)はここで吸収する。 */
+    padding-right: 16px;
+  }
+
+  .camera-viewport {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  /* サイドバー。内容が収まらない場合は、サイドバー全体がスクロールする。 */
+  .camera-side {
+    display: flex;
+    flex-direction: column;
+    grid-column: 2;
+    grid-row: 1 / -1;
+    min-width: 0;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--color-surface);
+    border-left: 1px solid var(--color-border);
+  }
+
+  .camera-panel-slot {
+    flex: 0 0 auto;
+    max-height: none;
+    overflow: visible;
+    border-top: none;
+  }
+
+  .character-panel {
+    gap: 10px;
+    padding: calc(env(safe-area-inset-top, 0px) + 10px)
+      calc(env(safe-area-inset-right, 0px) + 12px) 10px 12px;
+  }
+
+  /* 表示/非表示・リセット・削除を 2 列にして、縦の長さを抑える。 */
+  .character-panel__row--actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* 内容が少ないときは下端に、多いときはスクロール内で下端に固定する。 */
+  .camera-controls {
+    position: sticky;
+    bottom: 0;
+    flex: 0 0 auto;
+    margin-top: auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px calc(env(safe-area-inset-right, 0px) + 12px)
+      calc(env(safe-area-inset-bottom, 0px) + 10px) 12px;
+  }
+
+  /* 切り替えボタンは、ラベルが長いため全幅にする。 */
+  .camera-controls > :nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
+  .camera-button {
+    min-height: 44px;
+  }
 }

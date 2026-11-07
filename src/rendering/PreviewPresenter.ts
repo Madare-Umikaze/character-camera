@@ -34,6 +34,7 @@ export interface PreviewContentProvider {
  * - 背景(カメラ映像)は contain 配置。キャラクターの変形は背景に影響しない。
  * - カメラ稼働中は毎フレーム描画し、停止中は要求があったときだけ描画する。
  * - canvas の内部解像度は、CSS サイズ × devicePixelRatio(上限あり)。
+ * - 映像の寸法は毎フレーム video 要素から読むため、映像の向きや大きさが変わっても追従する。
  * - カメラやキャラクター画像のモジュールには依存しない。
  */
 export class PreviewPresenter {
@@ -60,6 +61,11 @@ export class PreviewPresenter {
 
   private readonly onWindowResize = (): void => {
     this.measure()
+  }
+
+  /** 映像の寸法が変わったとき、停止中でも描き直す。 */
+  private readonly onVideoResize = (): void => {
+    this.requestRender()
   }
 
   /**
@@ -110,6 +116,7 @@ export class PreviewPresenter {
     } else {
       window.addEventListener('resize', this.onWindowResize)
     }
+    this.video.addEventListener('resize', this.onVideoResize)
 
     this.measure()
     this.requestRender()
@@ -149,6 +156,15 @@ export class PreviewPresenter {
     this.schedule()
   }
 
+  /**
+   * 表示領域の寸法を測り直し、canvas の内部解像度を更新して、その場で描き直す。
+   * 画面の向きが変わった後など、レイアウトが変わった可能性があるときに呼ぶ。
+   * 結果が同じなら何も変わらないため、重複して呼んでも問題ない。
+   */
+  refreshLayout(): void {
+    this.measure()
+  }
+
   /** すべてのリソースを解放する。以降は使用しない。 */
   dispose(): void {
     if (this.disposed) {
@@ -165,6 +181,7 @@ export class PreviewPresenter {
       this.resizeObserver = null
     }
     window.removeEventListener('resize', this.onWindowResize)
+    this.video.removeEventListener('resize', this.onVideoResize)
 
     if (this.handle !== null) {
       this.handle.renderer.dispose()
@@ -226,6 +243,7 @@ export class PreviewPresenter {
   /** 現在の内容から、1 フレーム分の描画入力を組み立てる。 */
   private buildFrame(): FrameInput {
     // 背景。映像が準備できていない場合、rect の幅・高さは 0 になり、描画器は描かない。
+    // 映像の寸法は毎フレーム video 要素から読むため、向きや大きさの変化に追従する。
     const background = {
       source: this.video,
       rect: computeContainRect(

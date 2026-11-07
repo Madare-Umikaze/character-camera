@@ -109,13 +109,7 @@ export class GestureHandler {
       return
     }
     this.pointers.delete(event.pointerId)
-    try {
-      if (this.target.hasPointerCapture(event.pointerId)) {
-        this.target.releasePointerCapture(event.pointerId)
-      }
-    } catch {
-      // すでに解放されている場合などは無視する。
-    }
+    this.releaseCapture(event.pointerId)
     this.updateDraggingClass()
   }
 
@@ -164,6 +158,26 @@ export class GestureHandler {
     target.addEventListener('contextmenu', this.onContextMenu)
   }
 
+  /**
+   * 進行中の操作(ドラッグ・ピンチ)を、すべて安全に終了する。
+   * 画面の向きが変わり始めたときなど、操作の途中で座標系が変わる場合に呼ぶ。
+   *
+   * 指が画面に残っていても、その指の以後の動きは無視される。
+   * 指を離して触り直すと、新しい操作として始まる。画像の状態は変更しない。
+   */
+  cancel(): void {
+    if (this.pointers.size === 0) {
+      return
+    }
+    const ids = Array.from(this.pointers.keys())
+    // 先に追跡を止める。キャプチャ解放で lostpointercapture が発生しても、無視される。
+    this.pointers.clear()
+    for (const id of ids) {
+      this.releaseCapture(id)
+    }
+    this.updateDraggingClass()
+  }
+
   /** イベントリスナーを解除し、状態を元に戻す。以降は使用しない。 */
   dispose(): void {
     if (this.disposed) {
@@ -187,6 +201,17 @@ export class GestureHandler {
   // ---------------------------------------------------------------
   // 内部処理
   // ---------------------------------------------------------------
+
+  /** ポインターキャプチャを解放する。すでに解放済みの場合などは無視する。 */
+  private releaseCapture(pointerId: number): void {
+    try {
+      if (this.target.hasPointerCapture(pointerId)) {
+        this.target.releasePointerCapture(pointerId)
+      }
+    } catch {
+      // すでに解放されている場合などは無視する。
+    }
+  }
 
   /** イベントの位置を、対象要素の左上を原点とした CSS ピクセルへ変換する。 */
   private toLocal(event: MouseEvent): Point2D {
