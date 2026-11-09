@@ -8,6 +8,12 @@ import type { Point2D, Size2D } from '../types/geometry.ts'
  *
  * 読み取り専用のタプルにして、添字アクセスが undefined にならないようにしている。
  * DOM・WebGL には依存しない。
+ *
+ * 精度:
+ * gl-matrix の mat3.create() は、既定で単精度(Float32Array)を返す。
+ * 画面座標(数百)を含む行列を単精度で合成すると、約 3×10⁻⁵ の丸め誤差が出るため、
+ * 計算結果は通常の配列(倍精度)で受け取る。
+ * GPU に渡す直前だけ、mat3ToFloat32Array で単精度に変換する。
  */
 export type Mat3 = readonly [
   number,
@@ -21,28 +27,18 @@ export type Mat3 = readonly [
   number,
 ]
 
-/** gl-matrix の mat3 の実体の型(型定義の差異に依存しないよう戻り値から導く)。 */
-type GlMat3 = ReturnType<typeof mat3.create>
+/** gl-matrix の関数の出力先として使う、書き換え可能な倍精度の行列。 */
+type Mat3Tuple = [number, number, number, number, number, number, number, number, number]
 
 /** 単位行列。 */
 export const IDENTITY_MAT3: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
-function toGl(m: Mat3): GlMat3 {
-  return mat3.fromValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8])
+function identityTuple(): Mat3Tuple {
+  return [1, 0, 0, 0, 1, 0, 0, 0, 1]
 }
 
-function fromGl(m: GlMat3): Mat3 {
-  return [
-    m[0] ?? 0,
-    m[1] ?? 0,
-    m[2] ?? 0,
-    m[3] ?? 0,
-    m[4] ?? 0,
-    m[5] ?? 0,
-    m[6] ?? 0,
-    m[7] ?? 0,
-    m[8] ?? 0,
-  ]
+function toTuple(m: Mat3): Mat3Tuple {
+  return [m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]]
 }
 
 /**
@@ -50,9 +46,9 @@ function fromGl(m: GlMat3): Mat3 {
  * 点に適用すると、b が先に、a が後に適用される。
  */
 export function multiplyMat3(a: Mat3, b: Mat3): Mat3 {
-  const out = mat3.create()
-  mat3.multiply(out, toGl(a), toGl(b))
-  return fromGl(out)
+  const out = identityTuple()
+  mat3.multiply(out, toTuple(a), toTuple(b))
+  return out
 }
 
 /**
@@ -72,16 +68,16 @@ export function createTrsMatrix(
   sx: number,
   sy: number,
 ): Mat3 {
-  const m = mat3.create()
+  const m = identityTuple()
   mat3.translate(m, m, [tx, ty])
   mat3.rotate(m, m, rotation)
   mat3.scale(m, m, [sx, sy])
-  return fromGl(m)
+  return m
 }
 
 /**
  * 行列で点を変換する。
- * 射影変換(Phase 3 以降)に備えて、同次座標の w による除算を行う。
+ * 射影変換(Phase 3 以降)に対応するため、同次座標の w による除算を行う。
  * w が 0 に等しい場合は変換できないため null を返す。
  */
 export function transformPoint(m: Mat3, p: Point2D): Point2D | null {
@@ -102,10 +98,10 @@ export function transformPoint(m: Mat3, p: Point2D): Point2D | null {
 export function buildPixelToClipMatrix(size: Size2D): Mat3 {
   const w = Math.max(size.width, 1)
   const h = Math.max(size.height, 1)
-  return fromGl(mat3.fromValues(2 / w, 0, 0, 0, -2 / h, 0, -1, 1, 1))
+  return [2 / w, 0, 0, 0, -2 / h, 0, -1, 1, 1]
 }
 
-/** uniformMatrix3fv に渡すための Float32Array へ変換する。 */
+/** uniformMatrix3fv に渡すための Float32Array へ変換する(GPU への受け渡し用)。 */
 export function mat3ToFloat32Array(m: Mat3): Float32Array {
   return new Float32Array(m)
 }
