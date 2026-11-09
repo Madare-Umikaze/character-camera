@@ -9,6 +9,10 @@
   --color-danger: #b91c1c;
   --color-error-bg: rgba(220, 38, 38, 0.92);
   --color-error-text: #ffffff;
+  --color-handle: #ffffff;
+  --color-handle-fill: rgba(59, 130, 246, 0.4);
+  --color-handle-active: #facc15;
+  --color-handle-active-fill: rgba(250, 204, 21, 0.4);
 
   --font-sans: system-ui, -apple-system, 'Hiragino Sans', 'Noto Sans JP',
     'Segoe UI', Roboto, sans-serif;
@@ -69,7 +73,7 @@ body {
 /* ---------------------------------------------------------------
    カメラ画面:縦画面(既定)
    上:状態表示 / 中央:プレビュー / その下:画像パネル / 最下部:カメラ操作
-   camera-side は display: contents にして、Phase 2 の 4 行グリッドをそのまま使う。
+   camera-side は display: contents にして、4 行グリッドをそのまま使う。
    --------------------------------------------------------------- */
 
 .camera-app {
@@ -190,11 +194,102 @@ body {
 }
 
 /* ---------------------------------------------------------------
+   四隅ハンドル(表示のみ。操作は canvas が受ける)
+   位置は、JavaScript が .perspective-handle の transform で指定する。
+   --------------------------------------------------------------- */
+
+.perspective-handles {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.perspective-handles__outline {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.perspective-handles__shape {
+  fill: none;
+  stroke: var(--color-handle);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  /* 明るい映像でも暗い映像でも、線が見えるようにする。 */
+  filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.9));
+}
+
+/* 位置の基準点(大きさ 0)。丸は、この点を中心に置く。 */
+.perspective-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  will-change: transform;
+}
+
+.perspective-handle__dot {
+  position: absolute;
+  top: -18px;
+  left: -18px;
+  width: 36px;
+  height: 36px;
+  box-sizing: border-box;
+  border: 3px solid var(--color-handle);
+  border-radius: 50%;
+  background: var(--color-handle-fill);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
+  transition:
+    transform 80ms ease-out,
+    opacity 80ms ease-out,
+    background-color 80ms ease-out,
+    border-color 80ms ease-out;
+}
+
+/* 位置を正確に合わせられるよう、中心に小さな点を置く。 */
+.perspective-handle__dot::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: var(--color-handle);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+
+/* 操作中のハンドルを強調し、ほかのハンドルを薄くする。 */
+.perspective-handle--active .perspective-handle__dot {
+  transform: scale(1.3);
+  border-color: var(--color-handle-active);
+  background: var(--color-handle-active-fill);
+}
+
+.perspective-handles--active .perspective-handle:not(.perspective-handle--active) .perspective-handle__dot {
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .perspective-handle__dot {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------
    キャラクター画像パネル
+   項目が多いため、縦画面では余白を詰め、収まらない場合はパネル内でスクロールする。
    --------------------------------------------------------------- */
 
 .camera-panel-slot {
-  max-height: 40svh;
+  max-height: 38svh;
   overflow-y: auto;
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
@@ -203,8 +298,8 @@ body {
 .character-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px calc(env(safe-area-inset-right, 0px) + 16px) 10px
+  gap: 6px;
+  padding: 8px calc(env(safe-area-inset-right, 0px) + 16px) 8px
     calc(env(safe-area-inset-left, 0px) + 16px);
 }
 
@@ -223,6 +318,7 @@ body {
 .character-panel__row--actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .character-panel__name {
@@ -242,7 +338,7 @@ body {
 
 .character-panel__slider {
   width: 100%;
-  min-height: 32px;
+  min-height: 28px;
   margin: 0;
   accent-color: var(--color-accent);
   touch-action: manipulation;
@@ -286,6 +382,13 @@ body {
   touch-action: manipulation;
 }
 
+/* 操作ボタンの行は、ラベルが長いため、余白と文字を少し小さくする。 */
+.character-panel__row--actions .panel-button {
+  min-height: 40px;
+  padding: 6px;
+  font-size: 0.8rem;
+}
+
 .panel-button--primary {
   flex: 0 0 auto;
   border-color: transparent;
@@ -296,6 +399,12 @@ body {
 .panel-button--danger {
   background: var(--color-danger);
   border-color: transparent;
+}
+
+/* 有効になっている切り替え(左右反転・ハンドルの表示中)。 */
+.panel-button--active {
+  border-color: var(--color-accent);
+  background: rgba(59, 130, 246, 0.25);
 }
 
 .panel-button--small {
@@ -371,7 +480,7 @@ body {
 
 @media (orientation: landscape) {
   .camera-app {
-    grid-template-columns: minmax(0, 1fr) clamp(240px, 34vw, 320px);
+    grid-template-columns: minmax(0, 1fr) clamp(260px, 34vw, 340px);
     grid-template-rows: auto minmax(0, 1fr);
   }
 
@@ -415,7 +524,11 @@ body {
       calc(env(safe-area-inset-right, 0px) + 12px) 10px 12px;
   }
 
-  /* 表示/非表示・リセット・削除を 2 列にして、縦の長さを抑える。 */
+  .character-panel__slider {
+    min-height: 32px;
+  }
+
+  /* 6 つのボタンを 2 列にして、縦の長さを抑える。 */
   .character-panel__row--actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

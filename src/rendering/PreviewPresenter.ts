@@ -1,6 +1,8 @@
-import { buildCharacterMatrix } from '../transform/characterTransform.ts'
+import { composeProjection } from '../transform/PerspectiveTransform.ts'
+import { buildBaseMatrix } from '../transform/Transform2D.ts'
 import type { CharacterImageState } from '../types/character.ts'
 import type { Size2D } from '../types/geometry.ts'
+import type { PerspectiveState } from '../types/perspective.ts'
 import { createOverlayRenderer } from './createOverlayRenderer.ts'
 import type {
   OverlayRendererHandle,
@@ -18,8 +20,10 @@ export interface CharacterContent {
   readonly bitmap: ImageBitmap
   /** 画像のサイズ(ピクセル)。 */
   readonly imageSize: Size2D
-  /** 変形・表示状態。 */
+  /** 基本変形・表示状態。 */
   readonly state: CharacterImageState
+  /** 射影変換(四隅・遠近感)の状態。 */
+  readonly perspective: PerspectiveState
 }
 
 /** 描画する内容の提供元。毎フレーム呼ばれる。 */
@@ -32,6 +36,7 @@ export interface PreviewContentProvider {
  * プレビューの描画ループと、canvas の管理を担当する。
  *
  * - 背景(カメラ映像)は contain 配置。キャラクターの変形は背景に影響しない。
+ * - キャラクターの行列は P = Base · H(基本変形と、四隅の射影変換)。背景には渡さない。
  * - カメラ稼働中は毎フレーム描画し、停止中は要求があったときだけ描画する。
  * - canvas の内部解像度は、CSS サイズ × devicePixelRatio(上限あり)。
  * - 映像の寸法は毎フレーム video 要素から読むため、映像の向きや大きさが変わっても追従する。
@@ -244,6 +249,7 @@ export class PreviewPresenter {
   private buildFrame(): FrameInput {
     // 背景。映像が準備できていない場合、rect の幅・高さは 0 になり、描画器は描かない。
     // 映像の寸法は毎フレーム video 要素から読むため、向きや大きさの変化に追従する。
+    // キャラクターの状態は、ここには一切入らない。
     const background = {
       source: this.video,
       rect: computeContainRect(
@@ -253,6 +259,7 @@ export class PreviewPresenter {
     }
 
     // 前景。背景の rect とは独立に、キャラクター自身の状態だけから行列を作る。
+    //   P = Base · H(H が先に適用される)
     let character: CharacterLayer | null = null
     const content = this.provider.getCharacter()
     if (
@@ -261,9 +268,13 @@ export class PreviewPresenter {
       content.imageSize.width > 0 &&
       content.imageSize.height > 0
     ) {
+      const base = buildBaseMatrix(content.state, content.imageSize, this.cssSize)
+      // 四隅は検証済みの状態だけを持つため、通常は null にならない。
+      // 万一ホモグラフィを求められない場合は、四隅を無視して基本変形だけで描く。
+      const matrix = composeProjection(base, content.perspective.corners) ?? base
       character = {
         bitmap: content.bitmap,
-        matrix: buildCharacterMatrix(content.state, content.imageSize, this.cssSize),
+        matrix,
         opacity: content.state.opacity,
       }
     }

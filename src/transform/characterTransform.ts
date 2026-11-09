@@ -5,13 +5,16 @@ import { createTrsMatrix } from './matrix.ts'
 import type { Mat3 } from './matrix.ts'
 
 /**
- * キャラクター画像の変形に関する純粋な計算。
+ * キャラクター画像の基本変形に関する純粋な計算。
  * DOM・WebGL・カメラには依存しない。
  *
  * 座標系:
  * - 状態の x, y はプレビューの中心を 0 とした割合(右・下が正)。
  * - 画面上の点は CSS ピクセル(左上が原点、Y が下向き)で扱う。
  * - 回転は Y が下向きの座標系で時計回りが正(ラジアン)。
+ *
+ * 左右反転(flipX)は、ここでは状態の値としてだけ扱う。
+ * 行列への反映は Transform2D.ts の buildBaseMatrix が行う。
  */
 
 /** scale の下限・上限。 */
@@ -83,6 +86,7 @@ export function normalizeCharacterState(
     rotation: normalizeAngle(state.rotation),
     opacity: clamp(finiteOr(state.opacity, DEFAULT_CHARACTER_STATE.opacity), 0, 1),
     visible: state.visible,
+    flipX: state.flipX,
   }
 }
 
@@ -110,6 +114,14 @@ export function withVisible(
   return { ...state, visible }
 }
 
+/** 左右反転だけを変えた新しい状態を返す。 */
+export function withFlipX(
+  state: CharacterImageState,
+  flipX: boolean,
+): CharacterImageState {
+  return { ...state, flipX }
+}
+
 /**
  * scale = 1 のときの画像の表示サイズ(CSS ピクセル)を返す。
  * 画像がプレビューの BASE_FILL_RATIO 以内に収まる大きさで、縦横比を保つ。
@@ -132,11 +144,12 @@ export function computeBaseSize(imageSize: Size2D, viewport: Size2D): Size2D {
 }
 
 /**
- * 「中心が原点の 1×1 の単位矩形」をプレビューの CSS ピクセル座標へ写す行列を返す。
+ * 「中心が原点の 1×1 の単位矩形」をプレビューの CSS ピクセル座標へ写す行列
+ * (拡大縮小 → 回転 → 平行移動。左右反転は含まない)を返す。
  * 単位矩形の四隅は (-0.5, -0.5) 〜 (0.5, 0.5)。
  *
- * Phase 3 では、この関数と同じ役割(単位矩形 → 画面座標)を持つ
- * 射影変換の行列に差し替える。
+ * 左右反転と、四隅の射影変換を含めた全体の行列は、
+ * Transform2D.ts と PerspectiveTransform.ts で組み立てる。
  */
 export function buildCharacterMatrix(
   state: CharacterImageState,

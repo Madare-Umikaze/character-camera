@@ -1,3 +1,5 @@
+import type { PerspectiveState } from './perspective.ts'
+
 /**
  * キャラクター画像に関する共通の型。
  *
@@ -6,8 +8,8 @@
  */
 
 /**
- * キャラクター画像の変形・表示状態。
- * Phase 3 で追加する四隅の座標(射影変換)は、この型には含めず別の型で扱う。
+ * キャラクター画像の基本変形・表示状態。
+ * 四隅の座標(射影変換)は、この型には含めず PerspectiveState で扱う。
  */
 export interface CharacterImageState {
   /**
@@ -28,6 +30,8 @@ export interface CharacterImageState {
   readonly opacity: number
   /** 表示するか。 */
   readonly visible: boolean
+  /** 左右反転するか。反転は、変形後の形全体を、画像の中心を通る縦軸で鏡映する。 */
+  readonly flipX: boolean
 }
 
 /** 初期状態(読み込み直後・リセット時)。 */
@@ -38,6 +42,7 @@ export const DEFAULT_CHARACTER_STATE: CharacterImageState = {
   rotation: 0,
   opacity: 1,
   visible: true,
+  flipX: false,
 }
 
 /** 読み込んだ画像の情報。 */
@@ -73,8 +78,10 @@ export interface ImageLoadError {
 export interface CharacterSnapshot {
   /** 読み込み済みの画像情報。画像がない場合は null。 */
   readonly image: CharacterImageInfo | null
-  /** 変形・表示状態。画像がない場合も初期値を保持する。 */
+  /** 基本変形・表示状態。画像がない場合も初期値を保持する。 */
   readonly state: CharacterImageState
+  /** 射影変換(四隅・遠近感)の状態。画像がない場合も初期値を保持する。 */
+  readonly perspective: PerspectiveState
   /** 読み込み中か。読み込み中も、前の画像は image に残る。 */
   readonly loading: boolean
   /** 直近の読み込みエラー。次の読み込み開始・成功・削除で null に戻る。 */

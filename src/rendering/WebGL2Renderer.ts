@@ -1,3 +1,4 @@
+import { invertHomography } from '../transform/Homography.ts'
 import {
   buildPixelToClipMatrix,
   createTrsMatrix,
@@ -6,32 +7,54 @@ import {
 } from '../transform/matrix.ts'
 import type { Mat3 } from '../transform/matrix.ts'
 import type { Size2D } from '../types/geometry.ts'
-import type { FrameInput, OverlayRenderer, RendererKind } from './OverlayRenderer.ts'
-import { QUAD_FRAGMENT_SHADER, QUAD_VERTEX_SHADER } from './shaders.ts'
+import type {
+  CharacterLayer,
+  FrameInput,
+  OverlayRenderer,
+  RendererKind,
+} from './OverlayRenderer.ts'
+import {
+  PROJECTIVE_FRAGMENT_SHADER,
+  PROJECTIVE_VERTEX_SHADER,
+  QUAD_FRAGMENT_SHADER,
+  QUAD_VERTEX_SHADER,
+} from './shaders.ts'
 
 /**
  * WebGL2 によるオーバーレイ描画。
  *
- * - 背景(カメラ映像)とキャラクターを、同じシェーダーで別々の行列を使って描く。
- *   キャラクターの変形は、キャラクターの行列にのみ含まれ、背景には影響しない。
- * - キャラクターはプリマルチプライドアルファで合成し、透過 PNG の透明部分を保つ。
+ * - 背景(カメラ映像)は、アフィンの矩形だけを描く専用のプログラムで描く。
+ *   キャラクターの変形は、背景には一切影響しない。
+ * - キャラクターは、射影変換の専用プログラムで描く。画素ごとに逆行列で UV を求めるため、
+ *   画像全体が射影変換される。プリマルチプライドアルファで合成し、透過 PNG の透明部分を保つ。
  * - コンテキストの消失・復元に対応する。
  * - 座標系は CSS ピクセル。クリップ座標への変換は、この中に閉じ込める。
  */
 
-/** GPU リソースの一式。 */
-interface GlResources {
+/** 単位矩形を描くプログラム(背景用)。 */
+interface QuadProgram {
   readonly program: WebGLProgram
   readonly vao: WebGLVertexArrayObject
-  readonly buffer: WebGLBuffer
   readonly matrixLocation: WebGLUniformLocation
   readonly opacityLocation: WebGLUniformLocation
   readonly textureLocation: WebGLUniformLocation
+}
+
+/** 射影変換で単位矩形を描くプログラム(キャラクター用)。 */
+interface ProjectiveProgram extends QuadProgram {
+  readonly inverseLocation: WebGLUniformLocation
+}
+
+/** GPU リソースの一式。 */
+interface GlResources {
+  readonly background: QuadProgram
+  readonly projective: ProjectiveProgram
+  readonly buffer: WebGLBuffer
   readonly videoTexture: WebGLTexture
   readonly characterTexture: WebGLTexture
 }
 
-/** 単位矩形の頂点(TRIANGLE_STRIP)。 */
+/** 単位矩形の頂点(TRIANGLE_STRIP)。左上・右上・左下・右下の順。 */
 const QUAD_VERTICES = new Float32Array([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5])
 
 /** video に現在のフレームがあり、描画できるか。 */
@@ -62,18 +85,20 @@ function compileShader(
   return shader
 }
 
-function createTexture(gl: WebGL2RenderingContext): WebGLTexture {
-  const texture = gl.createTexture()
-  if (texture === null) {
-    throw new Error('テクスチャを作成できませんでした')
+/** 頂点・フラグメントのシェーダーをコンパイルして、プログラムにリンクする。失敗時は解放して例外を投げる。 */
+function linkProgram(
+  gl: WebGL2RenderingContext,
+  vertexSource: string,
+  fragmentSource: string,
+): WebGLProgram {
+  const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource)
+  let fragmentShader: WebGLShader
+  try {
+    fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource)
+  } catch (error: unknown) {
+    gl.deleteShader(vertexShader)
+    throw error
   }
-  return texture
-}
-
-/** プログラム・バッファ・テクスチャを作る。失敗時は例外を投げる。 */
-function buildResources(gl: WebGL2RenderingContext): GlResources {
-  const vertexShader = compileShader(gl, gl.VERTEX_SHADER, QUAD_VERTEX_SHADER)
-  const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, QUAD_FRAGMENT_SHADER)
 
   const program = gl.createProgram()
   if (program === null) {
@@ -93,55 +118,131 @@ function buildResources(gl: WebGL2RenderingContext): GlResources {
     gl.deleteProgram(program)
     throw new Error(`プログラムのリンクに失敗しました: ${log}`)
   }
+  return program
+}
 
-  const matrixLocation = gl.getUniformLocation(program, 'u_matrix')
-  const opacityLocation = gl.getUniformLocation(program, 'u_opacity')
-  const textureLocation = gl.getUniformLocation(program, 'u_texture')
-  const positionLocation = gl.getAttribLocation(program, 'a_position')
-  if (
-    matrixLocation === null ||
-    opacityLocation === null ||
-    textureLocation === null ||
-    positionLocation < 0
-  ) {
-    gl.deleteProgram(program)
-    throw new Error('シェーダーの変数を取得できませんでした')
+function requireUniform(
+  gl: WebGL2RenderingContext,
+  program: WebGLProgram,
+  name: string,
+): WebGLUniformLocation {
+  const location = gl.getUniformLocation(program, name)
+  if (location === null) {
+    throw new Error(`シェーダーの変数 ${name} を取得できませんでした`)
   }
+  return location
+}
 
+/** 共有の頂点バッファを使う VAO を、プログラムごとに作る。 */
+function createQuadVao(
+  gl: WebGL2RenderingContext,
+  program: WebGLProgram,
+  buffer: WebGLBuffer,
+): WebGLVertexArrayObject {
+  const positionLocation = gl.getAttribLocation(program, 'a_position')
+  if (positionLocation < 0) {
+    throw new Error('頂点の変数 a_position を取得できませんでした')
+  }
   const vao = gl.createVertexArray()
-  const buffer = gl.createBuffer()
-  if (vao === null || buffer === null) {
-    gl.deleteProgram(program)
-    throw new Error('頂点バッファを作成できませんでした')
+  if (vao === null) {
+    throw new Error('頂点配列を作成できませんでした')
   }
   gl.bindVertexArray(vao)
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
-  gl.bufferData(gl.ARRAY_BUFFER, QUAD_VERTICES, gl.STATIC_DRAW)
   gl.enableVertexAttribArray(positionLocation)
   gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0)
   gl.bindVertexArray(null)
+  return vao
+}
 
-  const videoTexture = createTexture(gl)
-  const characterTexture = createTexture(gl)
+function createTexture(gl: WebGL2RenderingContext): WebGLTexture {
+  const texture = gl.createTexture()
+  if (texture === null) {
+    throw new Error('テクスチャを作成できませんでした')
+  }
+  return texture
+}
 
-  return {
-    program,
-    vao,
-    buffer,
-    matrixLocation,
-    opacityLocation,
-    textureLocation,
-    videoTexture,
-    characterTexture,
+/**
+ * プログラム・バッファ・テクスチャを作る。
+ * 途中で失敗した場合は、作成済みのものを解放してから例外を投げる。
+ */
+function buildResources(gl: WebGL2RenderingContext): GlResources {
+  const cleanups: Array<() => void> = []
+  try {
+    const buffer = gl.createBuffer()
+    if (buffer === null) {
+      throw new Error('頂点バッファを作成できませんでした')
+    }
+    cleanups.push(() => {
+      gl.deleteBuffer(buffer)
+    })
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+    gl.bufferData(gl.ARRAY_BUFFER, QUAD_VERTICES, gl.STATIC_DRAW)
+
+    const backgroundProgram = linkProgram(gl, QUAD_VERTEX_SHADER, QUAD_FRAGMENT_SHADER)
+    cleanups.push(() => {
+      gl.deleteProgram(backgroundProgram)
+    })
+    const backgroundVao = createQuadVao(gl, backgroundProgram, buffer)
+    cleanups.push(() => {
+      gl.deleteVertexArray(backgroundVao)
+    })
+    const background: QuadProgram = {
+      program: backgroundProgram,
+      vao: backgroundVao,
+      matrixLocation: requireUniform(gl, backgroundProgram, 'u_matrix'),
+      opacityLocation: requireUniform(gl, backgroundProgram, 'u_opacity'),
+      textureLocation: requireUniform(gl, backgroundProgram, 'u_texture'),
+    }
+
+    const projectiveProgram = linkProgram(
+      gl,
+      PROJECTIVE_VERTEX_SHADER,
+      PROJECTIVE_FRAGMENT_SHADER,
+    )
+    cleanups.push(() => {
+      gl.deleteProgram(projectiveProgram)
+    })
+    const projectiveVao = createQuadVao(gl, projectiveProgram, buffer)
+    cleanups.push(() => {
+      gl.deleteVertexArray(projectiveVao)
+    })
+    const projective: ProjectiveProgram = {
+      program: projectiveProgram,
+      vao: projectiveVao,
+      matrixLocation: requireUniform(gl, projectiveProgram, 'u_matrix'),
+      opacityLocation: requireUniform(gl, projectiveProgram, 'u_opacity'),
+      textureLocation: requireUniform(gl, projectiveProgram, 'u_texture'),
+      inverseLocation: requireUniform(gl, projectiveProgram, 'u_inverse'),
+    }
+
+    const videoTexture = createTexture(gl)
+    cleanups.push(() => {
+      gl.deleteTexture(videoTexture)
+    })
+    const characterTexture = createTexture(gl)
+    cleanups.push(() => {
+      gl.deleteTexture(characterTexture)
+    })
+
+    return { background, projective, buffer, videoTexture, characterTexture }
+  } catch (error: unknown) {
+    for (const cleanup of cleanups) {
+      cleanup()
+    }
+    throw error
   }
 }
 
 function deleteResources(gl: WebGL2RenderingContext, resources: GlResources): void {
   gl.deleteTexture(resources.videoTexture)
   gl.deleteTexture(resources.characterTexture)
+  gl.deleteVertexArray(resources.background.vao)
+  gl.deleteVertexArray(resources.projective.vao)
   gl.deleteBuffer(resources.buffer)
-  gl.deleteVertexArray(resources.vao)
-  gl.deleteProgram(resources.program)
+  gl.deleteProgram(resources.background.program)
+  gl.deleteProgram(resources.projective.program)
 }
 
 export class WebGL2Renderer implements OverlayRenderer {
@@ -219,14 +320,9 @@ export class WebGL2Renderer implements OverlayRenderer {
     gl.clearColor(0, 0, 0, 1)
     gl.clear(gl.COLOR_BUFFER_BIT)
 
-    gl.useProgram(resources.program)
-    gl.bindVertexArray(resources.vao)
-    gl.activeTexture(gl.TEXTURE0)
-    gl.uniform1i(resources.textureLocation, 0)
-
     const pixelToClip = buildPixelToClipMatrix(this.cssSize)
 
-    // --- 背景レイヤー(不透明。ブレンドなし) ---
+    // --- 背景レイヤー(不透明。ブレンドなし。キャラクターの変形とは無関係) ---
     const background = frame.background
     if (
       background !== null &&
@@ -234,6 +330,12 @@ export class WebGL2Renderer implements OverlayRenderer {
       background.rect.height > 0 &&
       isVideoReady(background.source)
     ) {
+      const program = resources.background
+      gl.useProgram(program.program)
+      gl.bindVertexArray(program.vao)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.uniform1i(program.textureLocation, 0)
+
       gl.disable(gl.BLEND)
       gl.bindTexture(gl.TEXTURE_2D, resources.videoTexture)
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
@@ -255,20 +357,13 @@ export class WebGL2Renderer implements OverlayRenderer {
         rect.width,
         rect.height,
       )
-      this.drawQuad(resources, multiplyMat3(pixelToClip, rectMatrix), 1)
+      this.drawBackground(program, multiplyMat3(pixelToClip, rectMatrix))
     }
 
-    // --- 前景レイヤー(キャラクター。プリマルチプライドアルファで合成) ---
+    // --- 前景レイヤー(キャラクター。射影変換、プリマルチプライドアルファで合成) ---
     const character = frame.character
     if (character !== null) {
-      this.ensureCharacterTexture(resources, character.bitmap)
-      gl.bindTexture(gl.TEXTURE_2D, resources.characterTexture)
-      gl.enable(gl.BLEND)
-      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-
-      const opacity = Math.min(Math.max(character.opacity, 0), 1)
-      this.drawQuad(resources, multiplyMat3(pixelToClip, character.matrix), opacity)
-      gl.disable(gl.BLEND)
+      this.drawCharacter(resources, character, pixelToClip)
     }
 
     gl.bindVertexArray(null)
@@ -294,11 +389,49 @@ export class WebGL2Renderer implements OverlayRenderer {
   // 内部処理
   // ---------------------------------------------------------------
 
-  private drawQuad(resources: GlResources, matrix: Mat3, opacity: number): void {
+  private drawBackground(program: QuadProgram, matrix: Mat3): void {
     const gl = this.gl
-    gl.uniformMatrix3fv(resources.matrixLocation, false, mat3ToFloat32Array(matrix))
-    gl.uniform1f(resources.opacityLocation, opacity)
+    gl.uniformMatrix3fv(program.matrixLocation, false, mat3ToFloat32Array(matrix))
+    gl.uniform1f(program.opacityLocation, 1)
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+  }
+
+  /**
+   * キャラクターを描く。
+   * layer.matrix は「画像ローカル座標(単位矩形)→ CSS ピクセル座標」の射影行列(アフィンでも可)。
+   * クリップ座標への行列と、その逆行列(クリップ座標 → 画像ローカル座標)をシェーダーへ渡す。
+   * 逆行列が求まらない(特異な)場合は、キャラクターだけ描かない。
+   */
+  private drawCharacter(
+    resources: GlResources,
+    layer: CharacterLayer,
+    pixelToClip: Mat3,
+  ): void {
+    const clipMatrix = multiplyMat3(pixelToClip, layer.matrix)
+    const inverse = invertHomography(clipMatrix)
+    if (inverse === null) {
+      return
+    }
+
+    const gl = this.gl
+    this.ensureCharacterTexture(resources, layer.bitmap)
+
+    const program = resources.projective
+    gl.useProgram(program.program)
+    gl.bindVertexArray(program.vao)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.uniform1i(program.textureLocation, 0)
+    gl.bindTexture(gl.TEXTURE_2D, resources.characterTexture)
+
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+
+    gl.uniformMatrix3fv(program.matrixLocation, false, mat3ToFloat32Array(clipMatrix))
+    gl.uniformMatrix3fv(program.inverseLocation, false, mat3ToFloat32Array(inverse))
+    gl.uniform1f(program.opacityLocation, Math.min(Math.max(layer.opacity, 0), 1))
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+
+    gl.disable(gl.BLEND)
   }
 
   /** 現在バインドされているテクスチャのサンプラー設定。 */
@@ -355,7 +488,7 @@ export class WebGL2Renderer implements OverlayRenderer {
 
 /**
  * canvas から WebGL2 コンテキストを取得して、描画器を作る。
- * WebGL2 が使えない場合や、初期化に失敗した場合は null を返す。
+ * WebGL2 が使えない場合や、初期化(シェーダーのコンパイル・リンクを含む)に失敗した場合は null を返す。
  *
  * 注意: 一度 getContext('webgl2') を呼んだ canvas は、2D コンテキストを取得できない。
  * フォールバックする場合は、新しい canvas を用意すること(createOverlayRenderer が行う)。
